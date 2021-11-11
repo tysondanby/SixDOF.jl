@@ -1,10 +1,6 @@
 module SixDOF
 
-
-using ForwardDiff
-using LinearAlgebra: norm, cross, eigen
-using WriteVTK
-
+using LinearAlgebra: norm, cross
 
 export Control, MassProp, Reference
 export AbstractAeroModel, AbstractPropulsionModel, AbstractInertialModel,
@@ -13,22 +9,10 @@ export StabilityDeriv, MotorPropBatteryDataFit, UniformGravitationalField,
     ConstantAtmosphere, ConstantController
 export CO, COUNTER, COCOUNTER
 export sixdof!
-export finite_jacobian, geteig, getjacobian, animvtk
-export Wing
-#DEBUG
-export aeroforces,propulsionforces,gravityforces, State
+export GetJacobian
 
 
 # ------ General Structs -------
-
-struct Wing{TV, TF}
-    pos::TV
-    dir::TV
-    cr::TF
-    ct::TF
-    tilt::TF
-    twist::TF
-end
 
 """
     State(x, y, z, phi, theta, psi, u, v, w, p, q, r)
@@ -593,6 +577,8 @@ end
 function setcontrol(controller::ConstantController, time, atm, state, mp, ref)
     return Control(controller.de, controller.dr, controller.da, controller.df, controller.throttle)
 end
+
+
 # --------------------------------------------------------
 
 
@@ -648,17 +634,15 @@ function sixdof!(ds, s, params, time)
     # linear dynamics
     vdot = F/mp.m - cross(omegab, Vb)
 
-    # angular dyna1mics
+    # angular dynamics
     I = [mp.Ixx -mp.Ixy -mp.Ixz;
          -mp.Iyz mp.Iyy -mp.Iyz;
          -mp.Ixz -mp.Iyz mp.Izz]
     omegadot = I \ (M - cross(omegab, I*omegab))
-
     # -------------------------
 
     # TODO: if we need more efficiency we can avoid allocating and then assigning.
     ds[1:3] = rdot
-    #ds[4:6] = omegab #Use for quaternions??
     ds[4] = phidot
     ds[5] = thetadot
     ds[6] = psidot
@@ -667,87 +651,10 @@ function sixdof!(ds, s, params, time)
 end
 
 
-function multQuat(a,b)#a and b are quaternions (four element vectors) being multiplied such that
-    #result = a*b
-    w = a[1]*b[1] - b[2]*a[2] - b[3]*a[3] - b[4]*a[4]
-    x = b[1]*a[2] + b[2]*a[1] - b[3]*a[4] + b[4]*a[3]
-    y = b[1]*a[3] + b[2]*a[4] + b[3]*a[1] - b[4]*a[2]
-    z = b[1]*a[4] - b[2]*a[3] + b[3]*a[2] + b[4]*a[1]
-    out = [w,x,y,z]
-    return out
-end
-
-#Rotates a quaternion (quat) that represents a rigid body.
-#Rotation is based on the angular velocity (omeg) and the time step (dt).
-function rotQuat(p,omeg,dt) #(4-tuple,3-tuple,double)
-    #result = a rotated quaternion representing the rigid body one dt later.
-
-    #for use later
-    oriMag= norm(p)
-
-    #find axis of rotation and angle to rotate through.
-    angSpd= norm(omeg)#angular speed about dir
-
-    if angSpd == 0.0 #AVOID NaNs
-        dir= omeg
-    else
-        dir= omeg ./ angSpd #Axis of rotation
-    end
-
-    th= angSpd*dt#theta (angular displacement) about the dir axis
-
-    #create quaternions for rotation
-    th = th/2.0 #quaternions double the angle input to them
-    q= [  cos(th), sin(th)*dir[1], sin(th)*dir[2], sin(th)*dir[3]  ]#the rotation quaternion
-    qinv= [  cos(-th), sin(-th)*dir[1], sin(-th)*dir[2], sin(-th)*dir[3]  ]#other rotation quaternion
-
-    #make output
-    out= multQuat(multQuat(q,p),qinv)
-    finalMag= norm(out) #Make sure magnitude is 1
-
-    if finalMag != 0
-        out = out.*(oriMag/finalMag)#DONT NORMALIZE THE QUATERNION!! Make the output have the same magnitude as before.
-    end
-
-    return out
-end
-
-function eulerToQuat(phi,th,psi)#takes euler angles. Gives axis and angle.
-    #Define quaternions for the whole rotation.
-    phi = phi/2.0
-    th = th/2.0
-    psi = psi/2.0
-
-    q1= [cos(psi),0,0,sin(psi)]
-    yb= rotQuat([0.0,0.0,1.0,0.0],[0.0,0.0,1.0],psi)#body y
-    x1= rotQuat([0.0,1.0,0.0,0.0],[0.0,0.0,1.0],psi)#intermediate
-    q2= [cos(th),(yb[2:4].*sin(th))...]
-    xb= rotQuat(x1,yb[2:4],th)#body x
-    q3= [cos(phi),(xb[2:4].*sin(phi))...]
-
-    #Define one quaternion for the rotation.
-    qout= multQuat(multQuat(q3,q2),q1)
-    magQ= norm(qout) #Make sure magnitude is 1
-    if magQ==0.0
-        qout = qout
-    else
-        qout = qout./magQ
-    end
-    #extract axis and angle from qout
-    angle = acos(qout[1])*2
-    magQ=norm(qout[2:4])
-    if magQ==0.0
-        axis = qout[2:4]
-    else
-        axis = qout[2:4]./magQ
-    end
-
-    return axis, angle
-end
 
 """
 
-    finite_jacobian(s, params)
+    getJacobian(s, params)
 
     Calculates the jacobian matrix of partial derivatives for the 6-DOF model
     represented by s and params.
@@ -761,281 +668,51 @@ end
 
 """
 
-function finite_jacobian(state,params)
+function GetJacobian(s,params)
 
     #How much to step (perturb) each state value. The closer this is to zero, the more theoretically accurate.
-    per=0.000001
+    #Small values, though, may lead to machine error.
+    per=0.05
 
     #Allocate ds. This makes them the same size and type. This value will be overwritten
-    ds = zeros(length(state))
-    ds[1:3]=state[7:9]
+    ds = zeros(length(s))
+
     #required for use of sixdof!() Not implemented.
-    time = 10.0
+    time = 0.0
     #Also must be reset each time sixdof!() is used.
-    centerS=state
-    centerP=params
-    sixdof!(ds, centerS, centerP, time)#sixdof!() modifies ds so that it is now the defailt derivatives
+    state0=s
+    params0=params
+    sixdof!(ds, state0, params0, time)#sixdof!() modifies ds so that it is now the defailt derivatives
     #Result: values in ds give the derivatives about the center point.
     centerds=ds
 
-
     #initialize the Jacobian matrix with zeros.
-    jacobian=zeros(length(state),length(state))
+    jacobian=zeros(length(s),length(s))
 
     #Loop to perturb each element of state and build the jacobian matrix
-    for i in 1:length(state)
+    for i in 1:length(s)
         #Must be reset each time sixdof!() is used to ensure that we are measuring around the same point each time.
         time = 0.0
-        centerS=zeros(length(state))
-        centerS=state
-        centerP=params
-        ds = zeros(length(state))
-        ds[1:3]=state[7:9]
+        state0=s
+        params0=params
+        ds = zeros(length(s))
 
         #Perturb s at correct index
-        centerS[i]=centerS[i]+per
+        state0[i]=state0[i]+per
         #Run sixdof!() for perturbed value.
-        sixdof!(ds, centerS, centerP, time)
+        sixdof!(ds, state0, params0, time)
 
         #Calculate the derivitives relative to centerds
         deltaS = ds - centerds
 
         #Store the new vector in its respective column.
-        jacobian[:,i]=deltaS./per
-
-        centerS[i]=centerS[i]-per#This may fix a weird bug
+        jacobian[:,i]=deltaS
     end
+
+
 
     return jacobian
 end
 
-function getjacobian(s,params)
-    ds = zeros(length(s))
-    function centered_sixdof!(ds, s)#used exclusivley for functionality with ForwardDiff.jl
-        t = 0.0
-        sixdof!(ds,s,params,t)
-    end
-    jacobian = ForwardDiff.jacobian(centered_sixdof!, ds, s)
-    return jacobian
-end
-
-"""
-
-    geteig(s, params)
-
-    Calculates the eigenvalues and eigenvectors for the 6-DOF model
-    represented by s and params.
-
-**Inputs**
-- s = x, y, z, phi, theta, psi, u, v, w, p, q, r (same order as State)
-- params = control, massproperties, reference, aeromodel, propmodel, inertialmodel, atmmodel
-
-**Outputs**
-- eigVal: Eigenvalues representing the system.
-- eigVect: Eigenvectors of the system.
-
-"""
-function geteig(s, params)
-    #get the jacobian matrix
-    jacobian=finite_jacobian(s,params)
-
-    eigVal, eigVect = eigen(jacobian)
-
-    return eigVal, eigVect#eigVal(i) corresponds to eigVect(:,i)
-end
-
-
-"""
-
-    animvtk(jacobian, model)
-
-    Makes an animation of stability modes based on the jacobian matrix and a model aircraft.
-
-**Inputs**
-- jacobian: jacobian matrix for the system.
-- model: Vector of arbitrary length. Each element contains info about an aerodynamic surface.
-- an element of model = Wing(position, direction,  cr, ct, tilt, twist) (dir has enough info for length, sweep and dihedral)
-
-**Outputs**
-- Writes a file:
-
-"""
-function animvtk(jacobian, model, planeName)#Makes a VTK animation
-    #TODO
-    targetamp=pi/6#30 deg max
-
-    #TODO: determine these two in a more robust way
-    resolution = 100.0
-    simEnd = 0.5
-
-    #We need these for the animation.
-    eigVal, eigVect = eigen(jacobian)
-    numEig=length(eigVal)
-    surfs=length(model)#Number of surfaces in the model.
-
-    #Define necessary points for zero displacement and zero angular displacement.
-    #They will be quaternions so that they can be moved easily.
-    numPts=4*surfs+1
-    quatPoints= zeros(4,numPts)              #4 points for each surface plus one for COM
-    for i in 1:surfs                         #define all points, one surface at a time
-        tilt = (pi/180)*model[i].tilt        #convert to radians
-        twist = (pi/180)*model[i].twist
-        quatPoints[2:4,4*i-2]= model[i].pos + [cos(tilt) 0.0 sin(tilt)].*model[i].cr/2               #Root Front
-        quatPoints[2:4,4*i-1]= model[i].pos + model[i].dir + [cos(tilt+twist) 0.0 sin(tilt+twist)].*model[i].ct/2  #Tip Front
-        quatPoints[2:4,  4*i]= model[i].pos - [cos(tilt) 0.0 sin(tilt)].*model[i].cr/2                             #Root Rear
-        quatPoints[2:4,4*i+1]= model[i].pos + model[i].dir - [cos(tilt+twist) 0.0 sin(tilt+twist)].*model[i].cr/2  #Tip rear
-    end
-    rotQuatPoints=zeros(4,numPts)           #allocate
-    rotQuatPoints[:,1:numPts] = quatPoints  #initialize
-
-    #DEFINE POLYGONS
-    polys= [MeshCell(PolyData.Polys(), (4*i-2):(4*i)) for i = 1:surfs]
-    polys2= [MeshCell(PolyData.Polys(), (4*i-1):(4*i+1)) for i = 1:surfs]
-    append!(polys,polys2)
-
-    #CLEAR EXISTING Anim FOLDER
-    rm("Anim/$planeName",recursive=true,force=true)
-    mkdir("Anim/$planeName")
-    mkdir("Anim/$planeName/vtk")
-    numPer=0             #Counter for periodic modes
-    numSub=0             #Counter for stable modes
-    numUn=0              #Counter for unstable modes
-    numPerSub=0          #Counter for stable periodic modes
-    numPerUn=0           #Counter for unstable periodic modes
-
-    for mode in 1:numEig #Loop for all animations
-
-        x = eigVect[:,mode]  #get eigenvector
-        lam = eigVal[mode]   #get eigenvalue
-        if imag(lam)<0.0     #Modes with negative imaginary parts are duplicates
-            @goto animEnd
-        end
-
-        #Label to identify what type of mode it is. Initialized as " "
-        type = " "
-
-        #initialize
-        tau=1.0/real(lam)             #time constant
-        TT=2.0*pi/imag(lam)           #oscilation period
-        #Determine simulation length and amplitude
-        if tau==NaN || tau==Inf   #Means pure periodic mode
-            if TT==NaN || TT==Inf #Means Stationary mode
-                simEnd=1.0
-                amp=0.0
-                type="Stationary"
-                @goto animEnd     #Stationary modes aren't interesting
-            else
-                simEnd=TT          #Simulate for 1 period (if periodic)
-                amp=targetamp/norm(x[4:6])
-                type="Periodic"
-                numPer=numPer+1
-                filename="Anim/$planeName"*"/$type"*"_$numPer"
-            end
-        elseif TT==NaN  || TT==Inf           #Means pure exponential
-            if tau<0.0                       #tau is positive (stable mode)
-                simEnd=-3.0*tau              #simulate for 3 time constants
-                amp=targetamp/norm(x[4:6])
-                type="Subsidence"
-                numSub=numSub+1
-                filename="Anim/$planeName"*"/$type"*"_$numSub"
-            else                            #tau is positive (unstable mode)
-                simEnd=tau                  #simulate 1 time constant
-                #Magnitude at end of simulation is biggest, so use it as a baseline.
-                amp=targetamp/(norm(x[4:6])*real(exp(lam*simEnd)))
-                type="Unstable"
-                numUn=numUn+1
-                filename="Anim/$planeName"*"/$type"*"_$numUn"
-            end
-        else                      #means exponential and periodic
-            if tau<0.0            #Means decay
-                simEnd=-3.0*tau   #simulate for 3 periods
-                amp=targetamp/(norm(x[4:6]))
-                type="Periodic_Subsidence"
-                numPerSub=numPerSub+1
-                filename="Anim/$planeName"*"/$type"*"_$numPerSub"
-            else                     #tau is positive (unstable mode)
-                simEnd=3.0*tau       #simulate 3 periods
-                #Magnitude at end of simulation is biggest, so use it as a baseline.
-                amp=2*targetamp/(norm(x[4:6])*exp(real(lam*simEnd)))
-                type="Periodic_Unstable"
-                numPerUn=numPerUn+1
-                filename="Anim/$planeName"*"/$type"*"_$numPerUn"
-            end
-        end
-        step=simEnd/resolution
-        if amp==NaN || amp==Inf#Catch NaNs so they dont become a problem.
-            amp=0.0
-        end
-
-        #ANIMATE EACH MODE
-        animPVD = paraview_collection(filename*".pvd")#WARNING: Probably only works on mac and linux due to structure of "filename."
-
-        #ADD VTK FILES TO .pvd COLLECTION. ONE VTK FILE AT A TIME
-        for t in 0.0:step:simEnd
-
-            #define state at any time, look at only real part
-            xt = amp*real(x.*exp(lam*t))
-
-            #get axis and angle from euler angles.
-            rotAxis,rotAngle =eulerToQuat(xt[4:6]...)
-
-            #rotate graphics
-            for j in 1:numPts
-                rotQuatPoints[:,j] = rotQuat(quatPoints[:,j],rotAxis,rotAngle)
-            end
-
-            pts = rotQuatPoints[2:4, : ]#points array (non-quaternion) just for animation
-            vtkFrame = vtk_grid("Anim/$planeName"*"/vtk/mode_"*"$planeName"*"_$mode"*"__t_$t"*".vtp",pts,polys)#one vtk file
-            vtkFrame["time"] = t
-            realLam = real(lam) #TODO Allocate these earlier to avoid doing it every loop.
-            imagLam = imag(lam)
-            vtkFrame["λ"] = "$realLam"*" + $imagLam"*"i"
-            vtkFrame["τ"] = tau
-            vtkFrame["T"] = TT
-            vtkFrame["A"] = amp
-            animPVD[t]= vtkFrame        #paraview animation
-        end
-        vtk_save(animPVD)               #save the paraview animation
-
-        #ANIMATE EACH PERIODIC MODE AGAIN, SHOWING ONLY PERIODIC PARTS
-        if type=="Periodic_Unstable" || type=="Periodic_Subsidence"
-            animPVD2 = paraview_collection(filename*"_Periodic"*".pvd")#WARNING: Probably only works on mac and linux
-            simEnd=2*pi          #Simulate for 1 period
-            step=simEnd/resolution
-            amp=targetamp/norm(x[4:6])
-
-            #ADD VTK FILES TO .pvd COLLECTION. ONE VTK FILE AT A TIME
-            for t in 0.0:step:simEnd
-                xt = amp*real(x).*sin(t) #define at any time, look at only real part of periodic response.
-
-                #get axis and angle from euler angles.
-                rotAxis,rotAngle =eulerToQuat(xt[4:6]...)
-
-                #rotate graphics
-                for j in 1:numPts
-                    rotQuatPoints[:,j] = rotQuat(quatPoints[:,j],rotAxis,rotAngle)
-                end
-
-                pts = rotQuatPoints[2:4, : ]#points array (non-quaternion) just for animation
-                vtkFrame = vtk_grid("Anim/$planeName"*"/vtk/mode_"*"$planeName"*"_$mode"*"_Periodic__t_$t"*".vtp",pts,polys)#one vtk file
-                vtkFrame["time"] = t
-                realLam = real(lam) #TODO Allocate these earlier to avoid doing it every loop.
-                imagLam = imag(lam)
-                vtkFrame["λ"] = "$realLam"*" + $imagLam"*"i"
-                vtkFrame["τ"] = tau
-                vtkFrame["T"] = TT
-                vtkFrame["A"] = amp
-                animPVD2[t*TT/(2*pi)]= vtkFrame#paraview animation
-            end
-            vtk_save(animPVD2)#save the paraview animation
-
-            @label animEnd #stationary modes will skip down to here
-        end
-
-    end
-end
-
-function trimstate()
-end
 
 end # module
