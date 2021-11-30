@@ -647,7 +647,7 @@ function sixdof!(ds, s, params, time)
 
     # linear dynamics
     vdot = F/mp.m - cross(omegab, Vb)
-
+    
     # angular dyna1mics
     I = [mp.Ixx -mp.Ixy -mp.Ixz;
          -mp.Iyz mp.Iyy -mp.Iyz;
