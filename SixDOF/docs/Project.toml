@@ -1,0 +1,8 @@
+[deps]
+DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+PyPlot = "d330b81b-6aea-500a-939a-2ce795aea3ee"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+
+[compat]
+Documenter = "0.24"
