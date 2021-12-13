@@ -42,29 +42,34 @@ spacing_s_v = Uniform()
 spacing_c_v = Uniform()
 mirror_v = false
 
-Sref = 9.0
+Sref = 8.0
 cref = 0.9
 bref = 10.0
-rref = [0.5, 0.0, 0.0]
-Vinf = 21.12711
+rref = [1.9437, 0.0, 0.3708]#TODO Always make this the correct CoM
+Vinf =  21.0967#Was originally 1
 ref = Reference(Sref, cref, bref, rref, Vinf)
 
-alpha = 1.206*pi/180
+alpha = 1.2129*pi/180
 beta = 0.0
 Omega = [0.0; 0.0; 0.0]
 fs = Freestream(Vinf, alpha, beta, Omega)
 
-symmetric = [true, true, false]
+symmetric = [false, false, false,false,false]
 
 # generate surface panels for wing
 wgrid, wing = wing_to_surface_panels(xle, yle, zle, chord, theta, phi, ns, nc;
     mirror=mirror, fc = fc, spacing_s=spacing_s, spacing_c=spacing_c)
-
+wgrid2, wing2 = wing_to_surface_panels(xle, -yle, zle, chord, theta, phi, ns, nc;
+        mirror=mirror, fc = fc, spacing_s=spacing_s, spacing_c=spacing_c)
 # generate surface panels for horizontal tail
 hgrid, htail = wing_to_surface_panels(xle_h, yle_h, zle_h, chord_h, theta_h, phi_h, ns_h, nc_h;
     mirror=mirror_h, fc=fc_h, spacing_s=spacing_s_h, spacing_c=spacing_c_h)
 translate!(hgrid, [4.0, 0.0, 0.0])
 translate!(htail, [4.0, 0.0, 0.0])
+hgrid2, htail2 = wing_to_surface_panels(xle_h, -yle_h, zle_h, chord_h, theta_h, phi_h, ns_h, nc_h;
+    mirror=mirror_h, fc=fc_h, spacing_s=spacing_s_h, spacing_c=spacing_c_h)
+translate!(hgrid2, [4.0, 0.0, 0.0])
+translate!(htail2, [4.0, 0.0, 0.0])
 
 # generate surface panels for vertical tail
 vgrid, vtail = wing_to_surface_panels(xle_v, yle_v, zle_v, chord_v, theta_v, phi_v, ns_v, nc_v;
@@ -72,9 +77,9 @@ vgrid, vtail = wing_to_surface_panels(xle_v, yle_v, zle_v, chord_v, theta_v, phi
 translate!(vgrid, [4.0, 0.0, 0.0])
 translate!(vtail, [4.0, 0.0, 0.0])
 
-grids = [wgrid, hgrid, vgrid]
-surfaces = [wing, htail, vtail]
-surface_id = [1, 2, 3]
+grids = [wgrid, hgrid,wgrid2, hgrid2, vgrid] #TODO
+surfaces = [wing, htail,wing2, htail2, vtail] #TODO
+surface_id = [1, 2, 3,4,5]
 
 system = steady_analysis(surfaces, ref, fs; symmetric=symmetric, surface_id=surface_id)
 
@@ -98,6 +103,10 @@ Clq, Cmq, Cnq = dCM.q
 CDr, CYr, CLr = dCF.r
 Clr, Cmr, Cnr = dCM.r
 
+#Visualize the model
+properties= get_surface_properties(system)
+write_vtk("Anim/model",surfaces,properties; symmetric)
+
 using SixDOF
 
 CLM = 0.0 # Mach derivative
@@ -107,7 +116,7 @@ alphas = 15*pi/180
 U0=21.0967
 exp_Re = -0.2  # exponent in Reynolds number calc
 Mcc = 0.7  # crest critcal Mach number
-e = 0.365  # Oswald efficiency
+e = 0.80  # Oswald efficiency#TODO Adjust
 CDdf = 0.0  # flaps
 CDde = 0.0  # elevator
 CDda = 0.0  # aileron
@@ -123,10 +132,10 @@ Cnda = -0.000  # Roll (aileron) control derivative
 Cndr = 0.0  # Yaw (rudder) control derivative
 
 m = 7.25755
-Ixx = 38.15
+Ixx = 38.05
 Iyy = 26.46
-Izz = 62.87
-Ixz = -2.658
+Izz = 62.97
+Ixz = -2.133
 mp = MassProp(m, Ixx, Iyy, Izz, Ixz)
 
 Wi = [0.0, 0.0, 0.0]
@@ -168,54 +177,36 @@ nothing # hide
 
 Vinf = U0
 alpha = 1.21290*pi/180
-s0 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Vinf*cos(alpha), 0.0, Vinf*sin(alpha), 0.0, 0.0, 0.0]
+s0 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, U0, 0.0, 0.0, 0.0, 0.0, 0.0]
 tspan = (0.0, 4.0)
 p = mp, ref, sd, propulsion, inertial2, atm, controller
 
-# using DifferentialEquations
-# prob = DifferentialEquations.ODEProblem(sixdof!, s0, tspan, p)
-# sol = DifferentialEquations.solve(prob)
-# nothing # hide
 
 #Tyson testing his stuff
 JACOBIAN=finite_jacobian(s0,p)
-s0 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Vinf*cos(alpha), 0.0, Vinf*sin(alpha), 0.0, 0.0, 0.0]
+s0 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, U0, 0.0, 0.0, 0.0, 0.0, 0.0]
 p = mp, ref, sd, propulsion, inertial2, atm, controller
-NEWJACOBIAN=getjacobian(s0,p)
-
-#=
-struct wing{TV, TF}
-    pos::TV
-    dir::TV
-    cr::TF
-    ct::TF
-    tilt::TF
-    twist::TF
-end
-=#
 
 leftWing = Wing([0.0 0.0 0.0],[-.1 -1 -.05], .3, .1, 0.0, 3.0)
 rightWing = Wing([0.0 0.0 0.0],[-.1  1 -.05], .3, .1, 0.0, 3.0)
-
 planeModel = (leftWing,rightWing)
-
 animvtk(JACOBIAN, planeModel,"Test")
-animvtk(NEWJACOBIAN, planeModel,"Test2")
+
+
 using LinearAlgebra
 Eigenvals, Eigenvecs =eigen(JACOBIAN)
-Eigenvals2, Eigenvecs2 =eigen(NEWJACOBIAN)
 
 longitudinal = [JACOBIAN[7,7] JACOBIAN[7,9] JACOBIAN[7,11] JACOBIAN[7,5]
                 JACOBIAN[9,7] JACOBIAN[9,9] JACOBIAN[9,11] JACOBIAN[9,5]
                 JACOBIAN[11,7] JACOBIAN[11,9] JACOBIAN[11,11] JACOBIAN[11,5]
                 JACOBIAN[5,7] JACOBIAN[5,9] JACOBIAN[5,11] JACOBIAN[5,5]]
-Eigenvals3, Eigenvecs3 =eigen(longitudinal)
+EigenvalsLo, EigenvecsLo =eigen(longitudinal)
+lateral = [JACOBIAN[8,8] JACOBIAN[8,10] JACOBIAN[8,12] JACOBIAN[8,4]
+                JACOBIAN[10,8] JACOBIAN[10,10] JACOBIAN[10,12] JACOBIAN[10,4]
+                JACOBIAN[12,8] JACOBIAN[12,10] JACOBIAN[12,12] JACOBIAN[12,4]
+                JACOBIAN[4,8] JACOBIAN[4,10] JACOBIAN[4,12] JACOBIAN[4,4]]
+EigenvalsLa, EigenvecsLa =eigen(lateral)
 
-longitudinal2 = [NEWJACOBIAN[7,7] NEWJACOBIAN[7,9] NEWJACOBIAN[7,11] NEWJACOBIAN[7,5]
-                NEWJACOBIAN[9,7] NEWJACOBIAN[9,9] NEWJACOBIAN[9,11] NEWJACOBIAN[9,5]
-                NEWJACOBIAN[11,7] NEWJACOBIAN[11,9] NEWJACOBIAN[11,11] NEWJACOBIAN[11,5]
-                NEWJACOBIAN[5,7] NEWJACOBIAN[5,9] NEWJACOBIAN[5,11] NEWJACOBIAN[5,5]]
-Eigenvals4, Eigenvecs4 =eigen(longitudinal)
 
 #Hunting down errors--------------------------------
 s1=s0
@@ -234,7 +225,7 @@ sixdof!(ds, state0, params0, time)#sixdof!() modifies ds so that it is now the d
 #Result: values in ds give the derivatives about the center point.
 dsc=ds
 
-s1[7]=s1[7]+.001
+s1[10]=s1[10]+.001
 state1 = State(s1...)
 Fap,Map = aeroforces(sd, atm, state1, controller, ref, mp)
 Fpp,Mpp = propulsionforces(propulsion, atm, state1, controller, ref, mp)
@@ -246,9 +237,9 @@ params0=p
 ds = zeros(length(s0))
 ds[1:3]=s0[7:9]
 #Perturb s at correct index
-state0[7]=state0[7]+.001
+state0[10]=state0[10]+.001
 #Run sixdof!() for perturbed value.
 sixdof!(ds, state0, params0, time)
 dsp=ds#perturbed ds
 
-col7=(dsp-dsc)/.001
+col11=(dsp-dsc)/.001
