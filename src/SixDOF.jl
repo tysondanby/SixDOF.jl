@@ -1,3 +1,4 @@
+
 module SixDOF
 
 
@@ -647,7 +648,7 @@ function sixdof!(ds, s, params, time)
 
     # linear dynamics
     vdot = F/mp.m - cross(omegab, Vb)
-    
+
     # angular dyna1mics
     I = [mp.Ixx -mp.Ixy -mp.Ixz;
          -mp.Iyz mp.Iyy -mp.Iyz;
@@ -948,13 +949,13 @@ function animvtk(jacobian, model, planeName)#Makes a VTK animation
             end
         else                      #means exponential and periodic
             if tau<0.0            #Means decay
-                simEnd=-3.0*tau   #simulate for 3 periods
+                simEnd=-5.0*tau   #simulate for 5 time constants
                 amp=targetamp/(norm(x[4:6]))
                 type="Periodic_Subsidence"
                 numPerSub=numPerSub+1
                 filename="Anim/$planeName"*"/$type"*"_$numPerSub"
             else                     #tau is positive (unstable mode)
-                simEnd=3.0*tau       #simulate 3 periods
+                simEnd=5.0*tau       #simulate 5 time constants
                 #Magnitude at end of simulation is biggest, so use it as a baseline.
                 amp=2*targetamp/(norm(x[4:6])*exp(real(lam*simEnd)))
                 type="Periodic_Unstable"
@@ -987,12 +988,24 @@ function animvtk(jacobian, model, planeName)#Makes a VTK animation
             pts = rotQuatPoints[2:4, : ]#points array (non-quaternion) just for animation
             vtkFrame = vtk_grid("Anim/$planeName"*"/vtk/mode_"*"$planeName"*"_$mode"*"__t_$t"*".vtp",pts,polys)#one vtk file
             vtkFrame["time"] = t
-            realLam = real(lam) #TODO Allocate these earlier to avoid doing it every loop.
-            imagLam = imag(lam)
-            vtkFrame["λ"] = "$realLam"*" + $imagLam"*"i"
+            vtkFrame["λreal"] = real(lam)
+            vtkFrame["λimag"] = imag(lam)
             vtkFrame["τ"] = tau
             vtkFrame["T"] = TT
             vtkFrame["A"] = amp
+            vtkFrame["x_x"] = real(x[1])
+            vtkFrame["x_y"] = real(x[2])
+            vtkFrame["x_z"] = real(x[3])
+            vtkFrame["x_Φ"] = real(x[4])
+            vtkFrame["x_Θ"] = real(x[5])
+            vtkFrame["x_Ψ"] = real(x[6])
+            vtkFrame["x_Vx"] = real(x[7])
+            vtkFrame["x_Vy"] = real(x[8])
+            vtkFrame["x_Vz"] = real(x[9])
+            vtkFrame["x_p"] = real(x[10])
+            vtkFrame["x_q"] = real(x[11])
+            vtkFrame["x_r"] = real(x[12])
+
             animPVD[t]= vtkFrame        #paraview animation
         end
         vtk_save(animPVD)               #save the paraview animation
